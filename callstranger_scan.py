@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 ## CallStranger scanner
+
 # Usage:
 # 1. install dependencies (python3, requests, urllib3) (see Installation)
 # 2. create list of potentialy vulnerable hosts (one ip per line). eg.
@@ -89,7 +90,7 @@ for attempt in range(SSDP_MAX_ATTEMPTS):
             data, (remote, port) = s.recvfrom(32*1024)
             if remote in hosts:
                 urls = re.findall('location:[ ]*(.*)', data.decode('utf-8'), re.IGNORECASE)
-                hosts[remote]['services_urls'] = list(re.sub('://([^:/]*)([:/])', '://'+remote+'\\2', url.strip()) for url in urls)
+                hosts[remote]['services_urls'] = set(re.sub('://([^:/]*)([:/])', '://'+remote+'\\2', url.strip()) for url in urls)
                 hosts[remote]['ssdp'] = data
                 debug("got %d service urls from %s" % (len(hosts[remote]['services_urls']), remote))
             else:
@@ -104,11 +105,20 @@ for ip, host in hosts.items():
     if 'services_urls' not in host:
         continue
     for url in host['services_urls']:
-        r = requests.get(url)
-        base_url = '/'.join(url.split('/')[:3])
-        doc = xml.etree.ElementTree.fromstring(r.text)
-        elements = doc.findall('.//n:eventSubURL', namespaces=dict(n='urn:schemas-upnp-org:device-1-0'))
-        hosts[ip]['event_sub_urls'] = list(base_url + url.text for url in elements)
+        try:
+            r = requests.get(url)
+        except:
+            debug("failed to download services.xml from", url)
+            continue
+        try:
+            base_url = '/'.join(url.split('/')[:3])
+            doc = xml.etree.ElementTree.fromstring(r.text)
+            elements = doc.findall('.//n:eventSubURL', namespaces=dict(n='urn:schemas-upnp-org:device-1-0'))
+        except:
+            debug("failed to parse services.xml from", url)
+        hosts[ip]['event_sub_urls'] = set()
+        for el in elements:
+          hosts[ip]['event_sub_urls'].add(base_url + el.text)
         debug("got %d eventSubURLs from %s" % (len(hosts[ip]['event_sub_urls']), url))
 
 
@@ -123,8 +133,11 @@ for ip, host in hosts.items():
     if 'event_sub_urls' not in host:
         continue
     for url in host['event_sub_urls']:
-        resp = http.request('SUBSCRIBE', url, headers=headers)
-        print(';'.join(str(v) for v in [ip, url, resp.status, len(resp.data)]))
+        try:
+            resp = http.request('SUBSCRIBE', url, headers=headers)
+            print(';'.join(str(v) for v in [ip, url, resp.status, len(resp.data)]))
+        except:
+          print(';'.join(str(v) for v in [ip, url, "-", 0]))
 
 
 # 4. collect results on callback url
